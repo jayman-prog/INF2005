@@ -27,6 +27,8 @@ python -m app.main
 - Stego files are saved to your temp folder (shown in status).
 
 ## Folder layout
+
+
 stego-lsb/
 ├─ app/
 │  ├─ main.py                
