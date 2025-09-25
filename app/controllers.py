@@ -2,14 +2,13 @@
 import os, tempfile
 from PyQt6 import QtGui, QtWidgets, QtCore
 import numpy as np
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # add parent dir to path for imports
 
-# IO adapters
-try:
-    from stegoio.image_io import load_image_rgb, save_image_rgb
-    from stegoio.audio_io import load_wav_pcm16, save_wav_pcm16
-except ModuleNotFoundError:
-    from stegoio.image_io import load_image_rgb, save_image_rgb  # type: ignore
-    from stegoio.audio_io import load_wav_pcm16, save_wav_pcm16  # type: ignore
+from stegoio.image_io import load_image_rgb, save_image_rgb
+from stegoio.audio_io import load_wav_pcm16, save_wav_pcm16
+from stegoio.mime_utils import detect_mime_type, get_extension_from_mime
 
 from core.payload import pack_payload, try_unpack_partial
 from core.capacity import image_capacity_bits, audio_capacity_bits
@@ -259,20 +258,54 @@ def bind(window):
 
     def enc_load_payload(path):
         s.payload_path = path
-        msg = f"Payload loaded: {os.path.basename(path)}"
+        try:
+            # Get file size and detected MIME type
+            file_size = os.path.getsize(path)
+            mime_type = detect_mime_type(path)
+            size_kb = file_size / 1024
+            if size_kb < 1:
+                size_str = f"{file_size} bytes"
+            elif size_kb < 1024:
+                size_str = f"{size_kb:.1f} KB"
+            else:
+                size_str = f"{size_kb/1024:.1f} MB"
+            
+            msg = f"Payload loaded: {os.path.basename(path)} ({mime_type}, {size_str})"
+        except Exception:
+            msg = f"Payload loaded: {os.path.basename(path)}"
+            
         if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 4000)
         if hasattr(window, "statusLblEnc"): window.statusLblEnc.setText(msg)
 
 
     def do_encode():
         if not s.cover_path or not s.payload_path:
-            window.statusLbl.setText("Select cover and payload first.")
+            window.statusLblEnc.setText("Select cover and payload first.")
             return
         key = window.keySpinEnc.value()
         lsb = window.lsbSpinEnc.value()
+        
+        # Debug: Show encoding attempt
+        window.statusLblEnc.setText("Starting encoding process...")
+        
         try:
             raw = open(s.payload_path, 'rb').read()
-            packed = pack_payload(raw, "application/octet-stream", key_hint=(key % 1000003))
+            # Detect proper MIME type for the payload
+            mime_type = detect_mime_type(s.payload_path)
+            packed = pack_payload(raw, mime_type, key_hint=(key % 1000003))
+            
+            # Check capacity
+            payload_bits = len(packed) * 8
+            if s.cover_type == 'image':
+                cover_capacity = image_capacity_bits(s.cover_img, lsb)
+                if payload_bits > cover_capacity:
+                    window.statusLblEnc.setText(f"Payload too large! Need {payload_bits} bits but cover only has {cover_capacity} bits capacity at {lsb} LSB.")
+                    return
+            elif s.cover_type == 'audio':
+                cover_capacity = audio_capacity_bits(s.cover_audio, lsb)
+                if payload_bits > cover_capacity:
+                    window.statusLblEnc.setText(f"Payload too large! Need {payload_bits} bits but cover only has {cover_capacity} bits capacity at {lsb} LSB.")
+                    return
 
             if s.cover_type == 'image':
                 stego = encode_rgb(s.cover_img, packed, lsb, key, region=None)
@@ -301,15 +334,15 @@ def bind(window):
                     test_blob = decode_rgb_all(stego, lsb, key)
                     test_meta, _ = try_unpack_partial(test_blob)
                     if test_meta:
-                        msg = f"Stego image saved → {out}"
+                        msg = f"Encoded {mime_type} payload → Stego image saved → {out}"
                         if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 6000)
                         if hasattr(window, "statusLblEnc"): window.statusLblEnc.setText(msg)
                     else:
-                        msg = f"Stego image saved → {out}"
+                        msg = f"Encoded {mime_type} payload → Stego image saved → {out} (verify failed)"
                         if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 6000)
                         if hasattr(window, "statusLblEnc"): window.statusLblEnc.setText(msg)
                 except Exception:
-                    window.statusLbl.setText(f"Encoded → {out}")
+                    window.statusLblEnc.setText(f"Encoded → {out}")
 
             elif s.cover_type == 'audio':
                 stego = encode_wav(s.cover_audio, lsb, key, packed, region=None)
@@ -320,8 +353,8 @@ def bind(window):
                 # show diff in the panel
                 panel_pil = audio_difference_panel(s.cover_audio, stego, sr=s.sr, lsb=lsb)
                 window.diffPreviewEnc.setPixmap(to_qpixmap_from_pil(panel_pil))
-                window.imagePreviewEnc.setPixmap(to_text_pixmap(f"Saved stego WAV → {out}"))
-                window.statusLbl.setText(f"Encoded → {out}")
+                window.imagePreviewEnc.setPixmap(to_text_pixmap(f"Encoded {mime_type} payload → Saved stego WAV → {out}"))
+                window.statusLblEnc.setText(f"Encoded {mime_type} payload → {out}")
 
                 # enable + wire the pop-out
                 def _open_compare():
@@ -334,9 +367,9 @@ def bind(window):
                 window.openDiffPopupBtn.clicked.connect(_open_compare)
                 window.openDiffPopupBtn.setEnabled(True)
             else:
-                window.statusLbl.setText("Unsupported cover type.")
+                window.statusLblEnc.setText("Unsupported cover type.")
         except Exception as e:
-            window.statusLbl.setText(f"Encode error: {e}")
+            window.statusLblEnc.setText(f"Encode error: {e}")
 
     # ===================== DECODE TAB =====================
 
@@ -394,12 +427,9 @@ def bind(window):
                 window.statusLbl.setText("Decode failed: wrong key.")
                 return
 
-            # save recovered
-            ext_map = {
-                "image/png": ".png", "image/bmp": ".bmp", "image/gif": ".gif",
-                "audio/wav": ".wav", "text/plain": ".txt", "application/pdf": ".pdf",
-            }
-            ext = ext_map.get(meta.get("mime", ""), ".bin")
+            # save recovered with proper extension based on MIME type
+            mime_type = meta.get("mime", "application/octet-stream")
+            ext = get_extension_from_mime(mime_type)
             out = os.path.join(tempfile.gettempdir(), "recovered_payload" + ext)
             with open(out, "wb") as f:
                 f.write(meta["data"])
