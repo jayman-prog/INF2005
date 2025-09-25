@@ -28,6 +28,11 @@ def detect_mime_type(file_path: str) -> str:
             header = f.read(16)
             mime_from_magic = get_mime_from_magic(header)
             
+            # Special case: Office documents are ZIP files but should keep their specific type
+            office_extensions = {'.docx', '.xlsx', '.pptx', '.odt', '.ods', '.odp'}
+            if ext in office_extensions and mime_from_magic == 'application/zip':
+                return mime_from_ext  # Keep the specific Office document type
+            
             # If magic number detection is more specific, use it
             if mime_from_magic and mime_from_magic != 'application/octet-stream':
                 return mime_from_magic
@@ -97,6 +102,7 @@ def get_mime_from_extension(ext: str) -> str:
         '.xml': 'application/xml',
         '.csv': 'text/csv',
         '.md': 'text/markdown',
+        '.qmd': 'text/x-quarto',
         '.yaml': 'text/yaml',
         '.yml': 'text/yaml',
         
@@ -280,6 +286,7 @@ def get_extension_from_mime(mime_type: str) -> str:
         'application/xml': '.xml',
         'text/csv': '.csv',
         'text/markdown': '.md',
+        'text/x-quarto': '.qmd',
         'text/yaml': '.yaml',
         
         # Archives
