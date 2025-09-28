@@ -11,6 +11,7 @@ try:
     from stegoio.image_io import load_image_rgb, save_image_rgb
     from stegoio.audio_io import load_wav_pcm16, save_wav_pcm16
     from stegoio.video_io import load_video_frames, save_video_frames
+    from stegoio.mime_utils import detect_mime_type, get_extension_from_mime
 except ModuleNotFoundError:
     from stegoio.image_io import load_image_rgb, save_image_rgb  # type: ignore
     from stegoio.audio_io import load_wav_pcm16, save_wav_pcm16  # type: ignore
