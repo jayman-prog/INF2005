@@ -12,3 +12,9 @@ def audio_capacity_bits(wav_np, lsb: int) -> int:
     if a.ndim == 1: n = a.shape[0]
     else: n = a.shape[0] * a.shape[1]
     return n * lsb
+
+def video_capacity_bits(frames_np, lsb: int) -> int:
+    if frames_np is None or len(frames_np) == 0: return 0
+    # Use first frame capacity
+    h, w, c = frames_np[0].shape
+    return h * w * c * lsb

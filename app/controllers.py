@@ -6,14 +6,22 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # add parent dir to path for imports
 
-from stegoio.image_io import load_image_rgb, save_image_rgb
-from stegoio.audio_io import load_wav_pcm16, save_wav_pcm16
-from stegoio.mime_utils import detect_mime_type, get_extension_from_mime
+# IO adapters
+try:
+    from stegoio.image_io import load_image_rgb, save_image_rgb
+    from stegoio.audio_io import load_wav_pcm16, save_wav_pcm16
+    from stegoio.video_io import load_video_frames, save_video_frames
+except ModuleNotFoundError:
+    from stegoio.image_io import load_image_rgb, save_image_rgb  # type: ignore
+    from stegoio.audio_io import load_wav_pcm16, save_wav_pcm16  # type: ignore
+    from stegoio.video_io import load_video_frames, save_video_frames  # type: ignore
+
 
 from core.payload import pack_payload, try_unpack_partial
-from core.capacity import image_capacity_bits, audio_capacity_bits
+from core.capacity import image_capacity_bits, audio_capacity_bits, video_capacity_bits
 from core.image_lsb import encode_rgb, decode_rgb_all
 from core.audio_lsb import encode_wav, decode_wav_all
+from core.video_lsb import encode_video, decode_video_all
 from core.viz import difference_map, audio_difference_panel, render_audio_compare_panel,render_image_compare_panel
 
 
@@ -156,19 +164,25 @@ class AppState:
     def __init__(self):
         # Encode tab state
         self.cover_path = None
-        self.cover_type = None      # 'image' or 'audio'
+        self.cover_type = None      # 'image', 'audio', or 'video'
         self.cover_img = None       # np.uint8 HxWx3
         self.cover_audio = None     # np.int16 (n,) or (n,ch)
+        self.cover_video = None     # np.uint8 FxHxWx3
         self.sr = None
+        self.fps = None
         self.payload_path = None
+        self.payload_text = None
         self.stego_img = None
         self.stego_audio = None
+        self.stego_video = None
         # Decode tab state
         self.decode_path = None
         self.decode_type = None
         self.decode_img = None
         self.decode_audio = None
+        self.decode_video = None
         self.decode_sr = None
+        self.decode_fps = None
 
 
 # ---------------------- controller bind ----------------------
@@ -215,6 +229,9 @@ def bind(window):
         elif s.cover_type == 'audio' and s.cover_audio is not None:
             cap = audio_capacity_bits(s.cover_audio, lsb)
             window.capacityLblEnc.setText(f"Capacity: {cap} bits (~{cap//8} bytes)")
+        elif s.cover_type == 'video' and s.cover_video is not None:
+            cap = video_capacity_bits(s.cover_video, lsb)
+            window.capacityLblEnc.setText(f"Capacity: {cap} bits (~{cap//8} bytes)")
         else:
             window.capacityLblEnc.setText("Capacity: -")
 
@@ -225,36 +242,44 @@ def bind(window):
         window.openDiffPopupBtn.setEnabled(False)
 
         ext = os.path.splitext(path)[1].lower()
-        s.stego_img = None; s.stego_audio = None  # reset any previous stego
+        s.stego_img = None; s.stego_audio = None; s.stego_video = None  # reset any previous stego
         try:
             if ext in ('.bmp', '.png', '.gif', '.jpg', '.jpeg'):
                 img = load_image_rgb(path)
-                s.cover_img = img; s.cover_audio = None; s.cover_type = 'image'; s.sr = None
+                s.cover_img = img; s.cover_audio = None; s.cover_video = None; s.cover_type = 'image'; s.sr = None; s.fps = None
                 window.imagePreviewEnc.setPixmap(to_qpixmap_from_np_rgb(img))
                 window.diffPreviewEnc.setPixmap(QtGui.QPixmap())
                 if ext in ('.jpg', '.jpeg', '.gif'):
-                    window.statusLbl.setText(
+                    window.statusLblEnc.setText(
                         f"Loaded cover: {os.path.basename(path)} (warning: {ext.upper()} is lossy; stego will be saved as PNG)."
                     )
                 else:
-                    msg = window.statusLbl.setText(f"Loaded cover: {os.path.basename(path)}")
+                    msg = f"Loaded cover: {os.path.basename(path)}"
+                    window.statusLblEnc.setText(msg)
                     if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 4000)
-                    if hasattr(window, "statusLblEnc"): window.statusLblEnc.setText(msg)
             elif ext == '.wav':
                 audio, sr = load_wav_pcm16(path)
-                s.cover_audio = audio; s.cover_img = None; s.cover_type = 'audio'; s.sr = sr
+                s.cover_audio = audio; s.cover_img = None; s.cover_video = None; s.cover_type = 'audio'; s.sr = sr; s.fps = None
                 window.imagePreviewEnc.setPixmap(to_text_pixmap(f"WAV: {audio.shape} @ {sr}Hz"))
                 window.diffPreviewEnc.setPixmap(QtGui.QPixmap())
-                msg = window.statusLbl.setText(f"Loaded cover: {os.path.basename(path)}")
+                msg = f"Loaded cover: {os.path.basename(path)}"
+                window.statusLblEnc.setText(msg)
                 if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 4000)
-                if hasattr(window, "statusLblEnc"): window.statusLblEnc.setText(msg)
+            elif ext in ('.mp4', '.avi'):
+                frames, fps = load_video_frames(path)
+                s.cover_video = frames; s.cover_img = None; s.cover_audio = None; s.cover_type = 'video'; s.fps = fps; s.sr = None
+                window.imagePreviewEnc.setPixmap(to_qpixmap_from_np_rgb(frames[0]))
+                window.diffPreviewEnc.setPixmap(QtGui.QPixmap())
+                msg = f"Loaded cover: {os.path.basename(path)} ({len(frames)} frames @ {fps}fps)"
+                window.statusLblEnc.setText(msg)
+                if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 4000)
             else:
-                window.statusLbl.setText("Unsupported cover format.")
+                window.statusLblEnc.setText("Unsupported cover format.")
                 return
             s.cover_path = path
             update_capacity()
         except Exception as e:
-            window.statusLbl.setText(f"Failed to load cover: {e}")
+            window.statusLblEnc.setText(f"Failed to load cover: {e}")
 
     def enc_load_payload(path):
         s.payload_path = path
@@ -275,11 +300,20 @@ def bind(window):
             msg = f"Payload loaded: {os.path.basename(path)}"
             
         if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 4000)
-        if hasattr(window, "statusLblEnc"): window.statusLblEnc.setText(msg)
-
+        window.statusLblEnc.setText(msg)
+    
+    def enc_text_changed():
+        text = window.payloadTextEdit.toPlainText().strip()
+        if text:
+            s.payload_text = text
+            s.payload_path = None  # Clear file when text is entered
+            msg = f"Text payload: {len(text)} characters"
+            window.statusLblEnc.setText(msg)
+        else:
+            s.payload_text = None
 
     def do_encode():
-        if not s.cover_path or not s.payload_path:
+        if not s.cover_path or (not s.payload_path and not s.payload_text):
             window.statusLblEnc.setText("Select cover and payload first.")
             return
         key = window.keySpinEnc.value()
@@ -289,27 +323,32 @@ def bind(window):
         window.statusLblEnc.setText("Starting encoding process...")
         
         try:
-            raw = open(s.payload_path, 'rb').read()
-            # Detect proper MIME type for the payload
-            mime_type = detect_mime_type(s.payload_path)
-            packed = pack_payload(raw, mime_type, key_hint=(key % 1000003))
-            
-            # Check capacity
-            payload_bits = len(packed) * 8
-            if s.cover_type == 'image':
-                cover_capacity = image_capacity_bits(s.cover_img, lsb)
-                if payload_bits > cover_capacity:
-                    window.statusLblEnc.setText(f"Payload too large! Need {payload_bits} bits but cover only has {cover_capacity} bits capacity at {lsb} LSB.")
-                    return
-            elif s.cover_type == 'audio':
-                cover_capacity = audio_capacity_bits(s.cover_audio, lsb)
-                if payload_bits > cover_capacity:
-                    window.statusLblEnc.setText(f"Payload too large! Need {payload_bits} bits but cover only has {cover_capacity} bits capacity at {lsb} LSB.")
-                    return
+            if s.payload_text:
+                raw = s.payload_text.encode('utf-8')
+                packed = pack_payload(raw, "text/plain", key_hint=(key % 1000003))
+            else:
+                raw = open(s.payload_path, 'rb').read()
+                # Detect proper MIME type for the payload
+                mime_type = detect_mime_type(s.payload_path)
+                packed = pack_payload(raw, mime_type, key_hint=(key % 1000003))
+                
+                # Check capacity
+                payload_bits = len(packed) * 8
+                if s.cover_type == 'image':
+                    cover_capacity = image_capacity_bits(s.cover_img, lsb)
+                    if payload_bits > cover_capacity:
+                        window.statusLblEnc.setText(f"Payload too large! Need {payload_bits} bits but cover only has {cover_capacity} bits capacity at {lsb} LSB.")
+                        return
+                elif s.cover_type == 'audio':
+                    cover_capacity = audio_capacity_bits(s.cover_audio, lsb)
+                    if payload_bits > cover_capacity:
+                        window.statusLblEnc.setText(f"Payload too large! Need {payload_bits} bits but cover only has {cover_capacity} bits capacity at {lsb} LSB.")
+                        return
+
 
             if s.cover_type == 'image':
                 stego = encode_rgb(s.cover_img, packed, lsb, key, region=None)
-                s.stego_img = stego; s.stego_audio = None
+                s.stego_img = stego; s.stego_audio = None; s.stego_video = None
                 base = os.path.splitext(os.path.basename(s.cover_path))[0]
                 out  = os.path.join(tempfile.gettempdir(), f"stego_{base}.png")   # always lossless
                 save_image_rgb(stego, out)
@@ -336,23 +375,24 @@ def bind(window):
                     if test_meta:
                         msg = f"Encoded {mime_type} payload → Stego image saved → {out}"
                         if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 6000)
-                        if hasattr(window, "statusLblEnc"): window.statusLblEnc.setText(msg)
+                        window.statusLblEnc.setText(msg)
                     else:
                         msg = f"Encoded {mime_type} payload → Stego image saved → {out} (verify failed)"
                         if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 6000)
-                        if hasattr(window, "statusLblEnc"): window.statusLblEnc.setText(msg)
+                        window.statusLblEnc.setText(msg)
                 except Exception:
                     window.statusLblEnc.setText(f"Encoded → {out}")
 
             elif s.cover_type == 'audio':
                 stego = encode_wav(s.cover_audio, lsb, key, packed, region=None)
-                s.stego_audio = stego; s.stego_img = None
+                s.stego_audio = stego; s.stego_img = None; s.stego_video = None
                 out = os.path.join(tempfile.gettempdir(), f"stego_{os.path.basename(s.cover_path)}")
                 save_wav_pcm16(out, stego, s.sr)
 
                 # show diff in the panel
                 panel_pil = audio_difference_panel(s.cover_audio, stego, sr=s.sr, lsb=lsb)
                 window.diffPreviewEnc.setPixmap(to_qpixmap_from_pil(panel_pil))
+
                 window.imagePreviewEnc.setPixmap(to_text_pixmap(f"Encoded {mime_type} payload → Saved stego WAV → {out}"))
                 window.statusLblEnc.setText(f"Encoded {mime_type} payload → {out}")
 
@@ -366,6 +406,27 @@ def bind(window):
                     pass
                 window.openDiffPopupBtn.clicked.connect(_open_compare)
                 window.openDiffPopupBtn.setEnabled(True)
+            
+            elif s.cover_type == 'video':
+                print(f"\n=== VIDEO ENCODING START ===")
+                print(f"Payload: {len(packed)} bytes")
+                print(f"Cover: {s.cover_video.shape} frames")
+                
+                stego = encode_video(s.cover_video, packed, lsb, key)  # Use LSB method
+                s.stego_video = stego; s.stego_img = None; s.stego_audio = None
+                base = os.path.splitext(os.path.basename(s.cover_path))[0]
+                out = os.path.join(tempfile.gettempdir(), f"stego_{base}.avi")  # FFV1 lossless
+                save_video_frames(stego, out, s.fps)
+                
+                print(f"Stego video saved: {out}")
+                print(f"=== VIDEO ENCODING COMPLETE ===\n")
+                
+                window.imagePreviewEnc.setPixmap(to_qpixmap_from_np_rgb(stego[0]))
+                window.diffPreviewEnc.setPixmap(QtGui.QPixmap())
+                window.statusLblEnc.setText(f"Encoded → {out}")
+                window.openDiffPopupBtn.setEnabled(False)
+                window.openImgCompareBtn.setEnabled(False)
+            
             else:
                 window.statusLblEnc.setText("Unsupported cover type.")
         except Exception as e:
@@ -378,18 +439,23 @@ def bind(window):
         ext = os.path.splitext(path)[1].lower()
         try:
             if ext in ('.png', '.bmp'):
-                s.decode_img = load_image_rgb(path); s.decode_audio=None; s.decode_type='image'; s.decode_sr=None
+                s.decode_img = load_image_rgb(path); s.decode_audio=None; s.decode_video=None; s.decode_type='image'; s.decode_sr=None; s.decode_fps=None
                 window.imagePreviewDec.setPixmap(to_qpixmap_from_np_rgb(s.decode_img))
                 window.statusLbl.setText(f"Loaded stego: {os.path.basename(path)}")
             elif ext == '.wav':
                 a, sr = load_wav_pcm16(path)
-                s.decode_audio = a; s.decode_img=None; s.decode_type='audio'; s.decode_sr=sr
+                s.decode_audio = a; s.decode_img=None; s.decode_video=None; s.decode_type='audio'; s.decode_sr=sr; s.decode_fps=None
                 window.imagePreviewDec.setPixmap(to_text_pixmap(f"WAV: {a.shape} @ {sr}Hz"))
                 window.statusLbl.setText(f"Loaded stego: {os.path.basename(path)}")
+            elif ext in ('.mp4', '.avi'):
+                frames, fps = load_video_frames(path)
+                s.decode_video = frames; s.decode_img=None; s.decode_audio=None; s.decode_type='video'; s.decode_fps=fps; s.decode_sr=None
+                window.imagePreviewDec.setPixmap(to_qpixmap_from_np_rgb(frames[0]))
+                window.statusLbl.setText(f"Loaded stego: {os.path.basename(path)} ({len(frames)} frames)")
             elif ext in ('.jpg', '.jpeg', '.gif'):
                 window.statusLbl.setText("JPEG/GIF is lossy; LSBs destroyed. Drop the PNG/BMP stego saved during encode.")
             else:
-                window.statusLbl.setText("Unsupported stego format. Use PNG/BMP/WAV.")
+                window.statusLbl.setText("Unsupported stego format. Use PNG/BMP/WAV/AVI.")
         except Exception as e:
             window.statusLbl.setText(f"Failed to load stego: {e}")
 
@@ -418,6 +484,19 @@ def bind(window):
                 if not meta:
                     window.statusLbl.setText("Decode failed: No valid stego header found (audio).")
                     return
+            elif s.decode_type == 'video':
+                print(f"\n=== VIDEO DECODING START ===")
+                print(f"Stego video: {s.decode_video.shape} frames")
+                
+                blob = decode_video_all(s.decode_video, lsb, key, max_bits=80000)  # Use LSB method
+                meta, _ = try_unpack_partial(blob)
+                if not meta:
+                    print(f"Header search failed - no STG1 magic found")
+                    window.statusLbl.setText(f"Decode failed: No valid stego header found (video LSB). Try different Key value.")
+                    return
+                
+                print(f"Successfully found stego header!")
+                print(f"=== VIDEO DECODING COMPLETE ===\n")
             else:
                 window.statusLbl.setText("Unsupported stego type.")
                 return
@@ -443,11 +522,21 @@ def bind(window):
     # Encode tab
     window.encodeCoverDrop.fileDropped.connect(enc_load_cover)
     window.encodePayloadDrop.fileDropped.connect(enc_load_payload)
+    window.payloadTextEdit.textChanged.connect(enc_text_changed)
     window.encodeBtn.clicked.connect(do_encode)
     window.lsbSpinEnc.valueChanged.connect(lambda _: update_capacity())
+    window.browseCoverBtn.clicked.connect(lambda: _browse_file(window, window.encodeCoverDrop))
+    window.browsePayloadBtn.clicked.connect(lambda: _browse_file(window, window.encodePayloadDrop))
 
     # Decode tab
     window.decodeStegoDrop.fileDropped.connect(dec_load_stego)
     window.decodeBtn.clicked.connect(do_decode)
+    window.browseStegoBtn.clicked.connect(lambda: _browse_file(window, window.decodeStegoDrop))
 
     return s
+
+# ---------- file dialog helper ----------
+def _browse_file(window, dropArea):
+    path, _ = QtWidgets.QFileDialog.getOpenFileName(window, "Select File")
+    if path:
+        dropArea.fileDropped.emit(path)
