@@ -1,4 +1,3 @@
-# app/controllers.py
 import os, tempfile
 from PyQt6 import QtGui, QtWidgets, QtCore
 import numpy as np
@@ -8,20 +7,17 @@ try:
     from stegoio.image_io import load_image_rgb, save_image_rgb
     from stegoio.audio_io import load_wav_pcm16, save_wav_pcm16
 except ModuleNotFoundError:
-    from stegoio.image_io import load_image_rgb, save_image_rgb  # type: ignore
-    from stegoio.audio_io import load_wav_pcm16, save_wav_pcm16  # type: ignore
+    from io.image_io import load_image_rgb, save_image_rgb  # type: ignore
+    from io.audio_io import load_wav_pcm16, save_wav_pcm16  # type: ignore
 
 from core.payload import pack_payload, try_unpack_partial
 from core.capacity import image_capacity_bits, audio_capacity_bits
 from core.image_lsb import encode_rgb, decode_rgb_all
 from core.audio_lsb import encode_wav, decode_wav_all
-from core.viz import difference_map, audio_difference_panel, render_audio_compare_panel,render_image_compare_panel
+from core.viz import difference_map, audio_difference_panel, render_audio_compare_panel, render_image_compare_panel
 
-
-# ---------------------- small helpers ----------------------
-
+# ---------- helpers ----------
 def to_qpixmap_from_pil(pil_img):
-    """PIL -> QPixmap"""
     data = pil_img.tobytes("raw", pil_img.mode)
     if pil_img.mode == "L":
         fmt = QtGui.QImage.Format.Format_Grayscale8
@@ -32,182 +28,95 @@ def to_qpixmap_from_pil(pil_img):
     return QtGui.QPixmap.fromImage(qimg)
 
 def to_qpixmap_from_np_rgb(arr):
-    """np.uint8 HxWx3 RGB -> QPixmap"""
     h, w, c = arr.shape
     qimg = QtGui.QImage(arr.data, w, h, w * 3, QtGui.QImage.Format.Format_RGB888)
     return QtGui.QPixmap.fromImage(qimg.copy())
 
 def to_text_pixmap(text, w=620, h=240):
-    pm = QtGui.QPixmap(w, h)
-    pm.fill(QtGui.QColor('black'))
-    p = QtGui.QPainter(pm)
-    p.setPen(QtGui.QColor('white'))
-    p.drawText(10, h // 2, text)
-    p.end()
+    pm = QtGui.QPixmap(w, h); pm.fill(QtGui.QColor('black'))
+    p = QtGui.QPainter(pm); p.setPen(QtGui.QColor('white')); p.drawText(10, h // 2, text); p.end()
     return pm
 
-
-# ---------------------- audio compare dialog ----------------------
-
+# ---------- pop-out dialogs ----------
 class AudioCompareDialog(QtWidgets.QDialog):
-    """Pop-out: cover waveform, stego waveform, and difference with zoom/pan."""
     def __init__(self, cover_audio, stego_audio, sr=None, lsb=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Audio Compare (Cover vs Stego)")
-        self.cover = cover_audio
-        self.stego = stego_audio
-        self.sr = sr
-        self.lsb = lsb
-
-        self.imgLabel = QtWidgets.QLabel()
-        self.imgLabel.setMinimumSize(900, 540)
+        self.cover = cover_audio; self.stego = stego_audio; self.sr = sr; self.lsb = lsb
+        self.imgLabel = QtWidgets.QLabel(); self.imgLabel.setMinimumSize(900, 540)
         self.imgLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-
-        self.zoom = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.zoom.setRange(1, 100)   # 1%..100% of full length
-        self.zoom.setValue(10)
-
-        self.pan = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.pan.setRange(0, 1000)
-        self.pan.setValue(0)
-
+        self.zoom = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal); self.zoom.setRange(1, 100); self.zoom.setValue(10)
+        self.pan  = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal); self.pan.setRange(0, 1000); self.pan.setValue(0)
         closeBtns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
         closeBtns.rejected.connect(self.reject)
-
         lay = QtWidgets.QVBoxLayout(self)
         lay.addWidget(self.imgLabel)
-        lay.addWidget(QtWidgets.QLabel("Zoom (window length)"))
-        lay.addWidget(self.zoom)
-        lay.addWidget(QtWidgets.QLabel("Pan"))
-        lay.addWidget(self.pan)
-        lay.addWidget(closeBtns)
-
-        self.zoom.valueChanged.connect(self._refresh)
-        self.pan.valueChanged.connect(self._refresh)
+        lay.addWidget(QtWidgets.QLabel("Zoom (window length)")); lay.addWidget(self.zoom)
+        lay.addWidget(QtWidgets.QLabel("Pan")); lay.addWidget(self.pan); lay.addWidget(closeBtns)
+        self.zoom.valueChanged.connect(self._refresh); self.pan.valueChanged.connect(self._refresh)
         self._refresh()
-
     def _refresh(self):
-        n_cover = self.cover.shape[0] if self.cover.ndim == 1 else self.cover.shape[0]
-        n_stego = self.stego.shape[0] if self.stego.ndim == 1 else self.stego.shape[0]
-        n = min(n_cover, n_stego)
-        frac = max(1, self.zoom.value()) / 100.0
-        length = max(512, int(n * frac))
-        start_max = max(0, n - length)
-        start = int((self.pan.value() / 1000.0) * start_max)
-
-        panel = render_audio_compare_panel(self.cover, self.stego,
-                                           start=start, length=length,
-                                           sr=self.sr, lsb=self.lsb,
+        n = min(self.cover.shape[0], self.stego.shape[0])
+        frac = max(1, self.zoom.value())/100.0
+        length = max(512, int(n*frac)); start_max = max(0, n - length)
+        start = int((self.pan.value()/1000.0)*start_max)
+        panel = render_audio_compare_panel(self.cover, self.stego, start=start, length=length, sr=self.sr, lsb=self.lsb,
                                            width=900, height=540)
         self.imgLabel.setPixmap(to_qpixmap_from_pil(panel))
 
 class ImageCompareDialog(QtWidgets.QDialog):
-    """Pop-out: cover/stego/diff with zoom + pan for images."""
     def __init__(self, cover_img_np, stego_img_np, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Image Compare (Cover vs Stego)")
-        self.cover = cover_img_np
-        self.stego = stego_img_np
-
-        self.imgLabel = QtWidgets.QLabel()
-        self.imgLabel.setMinimumSize(900, 540)
+        self.cover = cover_img_np; self.stego = stego_img_np
+        self.imgLabel = QtWidgets.QLabel(); self.imgLabel.setMinimumSize(900, 540)
         self.imgLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-
-        self.zoom = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.zoom.setRange(1, 16)   # 1x..16x
-        self.zoom.setValue(4)
-
-        self.panX = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.panY = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        H, W, _ = self.cover.shape
-        self.panX.setRange(0, max(0, W - 1))
-        self.panY.setRange(0, max(0, H - 1))
-
-        btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close)
-        btns.rejected.connect(self.reject)
-
+        self.zoom = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal); self.zoom.setRange(1, 16); self.zoom.setValue(4)
+        self.panX = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal); self.panY = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        H, W, _ = self.cover.shape; self.panX.setRange(0, max(0, W-1)); self.panY.setRange(0, max(0, H-1))
+        btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close); btns.rejected.connect(self.reject)
         lay = QtWidgets.QVBoxLayout(self)
         lay.addWidget(self.imgLabel)
-        lay.addWidget(QtWidgets.QLabel("Zoom"))
-        lay.addWidget(self.zoom)
-        lay.addWidget(QtWidgets.QLabel("Pan X"))
-        lay.addWidget(self.panX)
-        lay.addWidget(QtWidgets.QLabel("Pan Y"))
-        lay.addWidget(self.panY)
-        lay.addWidget(btns)
-
-        self.zoom.valueChanged.connect(self._refresh)
-        self.panX.valueChanged.connect(self._refresh)
-        self.panY.valueChanged.connect(self._refresh)
+        lay.addWidget(QtWidgets.QLabel("Zoom")); lay.addWidget(self.zoom)
+        lay.addWidget(QtWidgets.QLabel("Pan X")); lay.addWidget(self.panX)
+        lay.addWidget(QtWidgets.QLabel("Pan Y")); lay.addWidget(self.panY); lay.addWidget(btns)
+        self.zoom.valueChanged.connect(self._refresh); self.panX.valueChanged.connect(self._refresh); self.panY.valueChanged.connect(self._refresh)
         self._refresh()
-
     def _refresh(self):
-        panel = render_image_compare_panel(
-            self.cover, self.stego,
-            view_w=900, view_h=540,
-            zoom=max(1, self.zoom.value()),
-            pan_x=self.panX.value(),
-            pan_y=self.panY.value()
-        )
+        panel = render_image_compare_panel(self.cover, self.stego, view_w=900, view_h=540,
+                                           zoom=max(1, self.zoom.value()), pan_x=self.panX.value(), pan_y=self.panY.value())
         self.imgLabel.setPixmap(to_qpixmap_from_pil(panel))
 
-# ---------------------- app state ----------------------
-
+# ---------- state ----------
 class AppState:
     def __init__(self):
-        # Encode tab state
+        # Encode
         self.cover_path = None
         self.cover_type = None      # 'image' or 'audio'
-        self.cover_img = None       # np.uint8 HxWx3
-        self.cover_audio = None     # np.int16 (n,) or (n,ch)
+        self.cover_img = None       # HxWx3 uint8
+        self.cover_audio = None     # (n,) or (n,ch) int16
         self.sr = None
         self.payload_path = None
         self.stego_img = None
         self.stego_audio = None
-        # Decode tab state
+        # Decode
         self.decode_path = None
         self.decode_type = None
         self.decode_img = None
         self.decode_audio = None
         self.decode_sr = None
 
-
-# ---------------------- controller bind ----------------------
-
+# ---------- bind ----------
 def bind(window):
     s = AppState()
-    window.openDiffPopupBtn = QtWidgets.QPushButton("Open Zoomed Compare")
-    window.openDiffPopupBtn.setEnabled(False)
 
-    window.openImgCompareBtn = QtWidgets.QPushButton("Open Image Compare")
-    window.openImgCompareBtn.setEnabled(False)
-    # put it inside the Difference Map box footer
+    # add footer buttons into the Difference Map box (encode tab)
+    window.openDiffPopupBtn = QtWidgets.QPushButton("Open Audio Compare"); window.openDiffPopupBtn.setEnabled(False)
+    window.openImgCompareBtn = QtWidgets.QPushButton("Open Image Compare"); window.openImgCompareBtn.setEnabled(False)
     if hasattr(window, "diffPreviewEnc") and hasattr(window.diffPreviewEnc, "add_footer_widget"):
         window.diffPreviewEnc.add_footer_widget(window.openImgCompareBtn)
         window.diffPreviewEnc.add_footer_widget(window.openDiffPopupBtn)
-    # --- tiny diagnostics ---
-    def _scan_magic_prefix(blob: bytes, magic=b"STG1", scan_bytes=64):
-        return blob[:scan_bytes].find(magic)
 
-    def probe_image_decode(img_np, lsb, key):
-        """Try variants to help diagnose symmetry mistakes."""
-        variants = [(True, 'RGB'), (False, 'RGB'), (True, 'BGR'), (False, 'BGR')]
-        for msb_first, chan in variants:
-            try:
-                blob = decode_rgb_all(img_np, lsb, key, region=None, max_bits=None,
-                                      msb_first=msb_first, channel_order=chan)
-                meta, _ = try_unpack_partial(blob)
-                if meta is not None:
-                    print(f"[probe] header with msb_first={msb_first}, channel_order={chan}")
-                    window.statusLbl.setText(
-                        f"Recovered using variant: msb_first={msb_first}, channel_order={chan}"
-                    )
-                    return True, meta
-            except Exception:
-                pass
-        return False, None
-
-    # --- capacity label (encode tab) ---
     def update_capacity():
         lsb = window.lsbSpinEnc.value()
         if s.cover_type == 'image' and s.cover_img is not None:
@@ -219,127 +128,108 @@ def bind(window):
         else:
             window.capacityLblEnc.setText("Capacity: -")
 
-    # ===================== ENCODE TAB =====================
-
+    # ============== ENCODE TAB ==============
     def enc_load_cover(path):
-        window.openImgCompareBtn.setEnabled(False)
-        window.openDiffPopupBtn.setEnabled(False)
-
+        s.stego_img = None; s.stego_audio = None
         ext = os.path.splitext(path)[1].lower()
-        s.stego_img = None; s.stego_audio = None  # reset any previous stego
         try:
             if ext in ('.bmp', '.png', '.gif', '.jpg', '.jpeg'):
                 img = load_image_rgb(path)
-                s.cover_img = img; s.cover_audio = None; s.cover_type = 'image'; s.sr = None
+                s.cover_img = img; s.cover_audio=None; s.cover_type='image'; s.sr=None
                 window.imagePreviewEnc.setPixmap(to_qpixmap_from_np_rgb(img))
                 window.diffPreviewEnc.setPixmap(QtGui.QPixmap())
-                if ext in ('.jpg', '.jpeg', '.gif'):
-                    window.statusLbl.setText(
-                        f"Loaded cover: {os.path.basename(path)} (warning: {ext.upper()} is lossy; stego will be saved as PNG)."
-                    )
-                else:
-                    msg = window.statusLbl.setText(f"Loaded cover: {os.path.basename(path)}")
-                    if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 4000)
-                    if hasattr(window, "statusLblEnc"): window.statusLblEnc.setText(msg)
+                window.statusLblEnc.setText(f"Loaded cover: {os.path.basename(path)}")
+                window.openImgCompareBtn.setEnabled(False)
+                window.openDiffPopupBtn.setEnabled(False)
             elif ext == '.wav':
                 audio, sr = load_wav_pcm16(path)
-                s.cover_audio = audio; s.cover_img = None; s.cover_type = 'audio'; s.sr = sr
+                s.cover_audio = audio; s.cover_img=None; s.cover_type='audio'; s.sr=sr
                 window.imagePreviewEnc.setPixmap(to_text_pixmap(f"WAV: {audio.shape} @ {sr}Hz"))
                 window.diffPreviewEnc.setPixmap(QtGui.QPixmap())
-                msg = window.statusLbl.setText(f"Loaded cover: {os.path.basename(path)}")
-                if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 4000)
-                if hasattr(window, "statusLblEnc"): window.statusLblEnc.setText(msg)
+                window.statusLblEnc.setText(f"Loaded cover: {os.path.basename(path)}")
+                window.openImgCompareBtn.setEnabled(False)
+                window.openDiffPopupBtn.setEnabled(False)
             else:
-                window.statusLbl.setText("Unsupported cover format.")
+                window.statusLblEnc.setText("Unsupported cover format.")
                 return
             s.cover_path = path
             update_capacity()
         except Exception as e:
-            window.statusLbl.setText(f"Failed to load cover: {e}")
+            window.statusLblEnc.setText(f"Failed to load cover: {e}")
 
     def enc_load_payload(path):
         s.payload_path = path
-        msg = f"Payload loaded: {os.path.basename(path)}"
-        if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 4000)
-        if hasattr(window, "statusLblEnc"): window.statusLblEnc.setText(msg)
-
+        window.statusLblEnc.setText(f"Payload loaded: {os.path.basename(path)}")
 
     def do_encode():
-        if not s.cover_path or not s.payload_path:
-            window.statusLbl.setText("Select cover and payload first.")
+        if not s.cover_path:
+            window.statusLblEnc.setText("Select a cover first.")
             return
+
         key = window.keySpinEnc.value()
         lsb = window.lsbSpinEnc.value()
-        try:
-            raw = open(s.payload_path, 'rb').read()
-            packed = pack_payload(raw, "application/octet-stream", key_hint=(key % 1000003))
 
+        # File or Text payload
+        use_text = (window.payloadTabs.currentIndex() == 1)
+        if use_text:
+            raw = window.payloadTextEdit.toPlainText().encode('utf-8')
+            payload_mime = "text/plain"
+            if not raw:
+                window.statusLblEnc.setText("Text payload is empty.")
+                return
+        else:
+            if not s.payload_path:
+                window.statusLblEnc.setText("Select a payload file or use the Text tab.")
+                return
+            raw = open(s.payload_path, 'rb').read()
+            payload_mime = "application/octet-stream"
+
+        packed = pack_payload(raw, payload_mime, key_hint=(key % 1000003))
+
+        try:
             if s.cover_type == 'image':
                 stego = encode_rgb(s.cover_img, packed, lsb, key, region=None)
-                s.stego_img = stego; s.stego_audio = None
-                base = os.path.splitext(os.path.basename(s.cover_path))[0]
-                out  = os.path.join(tempfile.gettempdir(), f"stego_{base}.png")   # always lossless
+                s.stego_img = stego; s.stego_audio=None
+                out = os.path.join(tempfile.gettempdir(), f"stego_{os.path.basename(s.cover_path)}.png")
                 save_image_rgb(stego, out)
-
                 window.imagePreviewEnc.setPixmap(to_qpixmap_from_np_rgb(stego))
-                dm = difference_map(s.cover_img, stego)  # PIL image
+                dm = difference_map(s.cover_img, stego)
                 window.diffPreviewEnc.setPixmap(to_qpixmap_from_pil(dm))
-                window.openDiffPopupBtn.setEnabled(False)
+                window.statusLblEnc.setText(f"Stego image saved → {out}")
+
+                # wire image compare pop-out
                 def _open_img_compare():
                     ImageCompareDialog(s.cover_img, stego, parent=window).exec()
-                try:
-                    window.openImgCompareBtn.clicked.disconnect()
-                except Exception:
-                    pass
+                try: window.openImgCompareBtn.clicked.disconnect()
+                except Exception: pass
                 window.openImgCompareBtn.clicked.connect(_open_img_compare)
                 window.openImgCompareBtn.setEnabled(True)
-
-                # image branch does not use audio compare button
                 window.openDiffPopupBtn.setEnabled(False)
-                # internal loopback (diagnostic)
-                try:
-                    test_blob = decode_rgb_all(stego, lsb, key)
-                    test_meta, _ = try_unpack_partial(test_blob)
-                    if test_meta:
-                        msg = f"Stego image saved → {out}"
-                        if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 6000)
-                        if hasattr(window, "statusLblEnc"): window.statusLblEnc.setText(msg)
-                    else:
-                        msg = f"Stego image saved → {out}"
-                        if hasattr(window, "appStatus"): window.appStatus.showMessage(msg, 6000)
-                        if hasattr(window, "statusLblEnc"): window.statusLblEnc.setText(msg)
-                except Exception:
-                    window.statusLbl.setText(f"Encoded → {out}")
 
             elif s.cover_type == 'audio':
                 stego = encode_wav(s.cover_audio, lsb, key, packed, region=None)
-                s.stego_audio = stego; s.stego_img = None
+                s.stego_audio = stego; s.stego_img=None
                 out = os.path.join(tempfile.gettempdir(), f"stego_{os.path.basename(s.cover_path)}")
                 save_wav_pcm16(out, stego, s.sr)
-
-                # show diff in the panel
                 panel_pil = audio_difference_panel(s.cover_audio, stego, sr=s.sr, lsb=lsb)
                 window.diffPreviewEnc.setPixmap(to_qpixmap_from_pil(panel_pil))
                 window.imagePreviewEnc.setPixmap(to_text_pixmap(f"Saved stego WAV → {out}"))
-                window.statusLbl.setText(f"Encoded → {out}")
+                window.statusLblEnc.setText(f"Stego WAV saved → {out}")
 
-                # enable + wire the pop-out
-                def _open_compare():
+                # wire audio compare pop-out
+                def _open_audio_compare():
                     AudioCompareDialog(s.cover_audio, stego, sr=s.sr, lsb=lsb, parent=window).exec()
-
-                try:
-                    window.openDiffPopupBtn.clicked.disconnect()
-                except Exception:
-                    pass
-                window.openDiffPopupBtn.clicked.connect(_open_compare)
+                try: window.openDiffPopupBtn.clicked.disconnect()
+                except Exception: pass
+                window.openDiffPopupBtn.clicked.connect(_open_audio_compare)
                 window.openDiffPopupBtn.setEnabled(True)
+                window.openImgCompareBtn.setEnabled(False)
             else:
-                window.statusLbl.setText("Unsupported cover type.")
+                window.statusLblEnc.setText("Unsupported cover type.")
         except Exception as e:
-            window.statusLbl.setText(f"Encode error: {e}")
+            window.statusLblEnc.setText(f"Encode error: {e}")
 
-    # ===================== DECODE TAB =====================
-
+    # ============== DECODE TAB ==============
     def dec_load_stego(path):
         s.decode_path = path
         ext = os.path.splitext(path)[1].lower()
@@ -353,63 +243,46 @@ def bind(window):
                 s.decode_audio = a; s.decode_img=None; s.decode_type='audio'; s.decode_sr=sr
                 window.imagePreviewDec.setPixmap(to_text_pixmap(f"WAV: {a.shape} @ {sr}Hz"))
                 window.statusLbl.setText(f"Loaded stego: {os.path.basename(path)}")
-            elif ext in ('.jpg', '.jpeg', '.gif'):
-                window.statusLbl.setText("JPEG/GIF is lossy; LSBs destroyed. Drop the PNG/BMP stego saved during encode.")
             else:
                 window.statusLbl.setText("Unsupported stego format. Use PNG/BMP/WAV.")
         except Exception as e:
             window.statusLbl.setText(f"Failed to load stego: {e}")
 
     def do_decode():
-        lsb = window.lsbSpinDec.value()
-        key = window.keySpinDec.value()
         if not s.decode_path:
-            window.statusLbl.setText("Drop a stego file first (Decode tab).")
+            window.statusLbl.setText("Drop a stego file first.")
             return
+        key = window.keySpinDec.value()
+        lsb = window.lsbSpinDec.value()
         try:
             if s.decode_type == 'image':
                 blob = decode_rgb_all(s.decode_img, lsb, key, region=None, max_bits=None)
-                meta, _ = try_unpack_partial(blob)
-                if not meta:
-                    ok, meta = probe_image_decode(s.decode_img, lsb, key)
-                    if not ok:
-                        off = _scan_magic_prefix(blob)
-                        if off >= 0:
-                            window.statusLbl.setText(f"Decode failed: header at byte offset {off} (bit packing/order mismatch).")
-                        else:
-                            window.statusLbl.setText("Decode failed: No valid stego header found.")
-                        return
             elif s.decode_type == 'audio':
                 blob = decode_wav_all(s.decode_audio, lsb, key, region=None, max_bits=None)
-                meta, _ = try_unpack_partial(blob)
-                if not meta:
-                    window.statusLbl.setText("Decode failed: No valid stego header found (audio).")
-                    return
             else:
                 window.statusLbl.setText("Unsupported stego type.")
                 return
 
-            # key guard
+            meta, _ = try_unpack_partial(blob)
+            if not meta:
+                window.statusLbl.setText("Decode failed: No valid stego header found.")
+                return
             if (meta.get('key_hint', 0) % 1000003) != (key % 1000003):
                 window.statusLbl.setText("Decode failed: wrong key.")
                 return
 
-            # save recovered
             ext_map = {
                 "image/png": ".png", "image/bmp": ".bmp", "image/gif": ".gif",
                 "audio/wav": ".wav", "text/plain": ".txt", "application/pdf": ".pdf",
             }
             ext = ext_map.get(meta.get("mime", ""), ".bin")
             out = os.path.join(tempfile.gettempdir(), "recovered_payload" + ext)
-            with open(out, "wb") as f:
-                f.write(meta["data"])
-
+            with open(out, "wb") as f: f.write(meta["data"])
             window.statusLbl.setText(f"Decoded {meta.get('mime','unknown')} ({meta.get('length',0)} bytes) → {out}")
-
         except Exception as e:
             window.statusLbl.setText(f"Decode error: {e}")
 
-    # ---------------- wire UI signals ----------------
+    # ---------- wire UI ----------
     # Encode tab
     window.encodeCoverDrop.fileDropped.connect(enc_load_cover)
     window.encodePayloadDrop.fileDropped.connect(enc_load_payload)
