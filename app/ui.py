@@ -54,7 +54,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("INF2005 Stego LSB")
-        self.resize(1200, 720)
+        self.resize(1280, 760)
 
         self.tabs = QtWidgets.QTabWidget()
         self.setCentralWidget(self.tabs)
@@ -63,7 +63,9 @@ class MainWindow(QtWidgets.QMainWindow):
         enc = QtWidgets.QWidget()
         enc_root = QtWidgets.QHBoxLayout(enc)
 
+        # Cover selection
         self.encodeCoverDrop = DropArea("Drop COVER (BMP/PNG/WAV)")
+        self.browseCoverBtn = QtWidgets.QPushButton("Browse Cover...")
 
         self.lsbSpinEnc = QtWidgets.QSpinBox(); self.lsbSpinEnc.setRange(1, 8); self.lsbSpinEnc.setValue(2)
         self.keySpinEnc = QtWidgets.QSpinBox(); self.keySpinEnc.setRange(0, 2_000_000_000); self.keySpinEnc.setValue(1234)
@@ -74,11 +76,12 @@ class MainWindow(QtWidgets.QMainWindow):
         encCtrls.addRow("Key:", self.keySpinEnc)
         encCtrls.addRow(self.capacityLblEnc)
 
-        # --- Payload Tabs (File / Text) ---
+        # Payload Tabs (File / Text)
         self.payloadTabs = QtWidgets.QTabWidget()
         fileTab = QtWidgets.QWidget(); fileLay = QtWidgets.QVBoxLayout(fileTab)
         self.encodePayloadDrop = DropArea("Drop PAYLOAD (any file)")
-        fileLay.addWidget(self.encodePayloadDrop)
+        self.browsePayloadBtn = QtWidgets.QPushButton("Browse Payload...")
+        fileLay.addWidget(self.encodePayloadDrop); fileLay.addWidget(self.browsePayloadBtn)
         self.payloadTabs.addTab(fileTab, "File")
         textTab = QtWidgets.QWidget(); textLay = QtWidgets.QVBoxLayout(textTab)
         self.payloadTextEdit = QtWidgets.QTextEdit()
@@ -94,6 +97,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         leftEnc = QtWidgets.QVBoxLayout()
         leftEnc.addWidget(self.encodeCoverDrop, 3)
+        leftEnc.addWidget(self.browseCoverBtn)
         leftEnc.addLayout(encCtrls)
         leftEnc.addWidget(self.payloadTabs, 3)
         leftEnc.addWidget(self.encodeBtn)
@@ -103,7 +107,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.imagePreviewEnc = PixmapBox("Preview (Cover/Stego)")
         self.diffPreviewEnc = PixmapBox("Difference Map")
-        # buttons added by controller: openImgCompareBtn, openDiffPopupBtn
 
         rightEnc = QtWidgets.QVBoxLayout()
         rightEnc.addWidget(self.imagePreviewEnc, 1)
@@ -112,14 +115,12 @@ class MainWindow(QtWidgets.QMainWindow):
         rightEncW.setMaximumWidth(900)
 
         enc_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        enc_splitter.addWidget(leftEncW)
-        enc_splitter.addWidget(rightEncW)
+        enc_splitter.addWidget(leftEncW); enc_splitter.addWidget(rightEncW)
         enc_splitter.setChildrenCollapsible(False)
         enc_splitter.setHandleWidth(8)
         enc_splitter.setStretchFactor(0, 3)
         enc_splitter.setStretchFactor(1, 2)
         enc_splitter.setSizes([620, 560])
-
         enc_root.addWidget(enc_splitter)
 
         # ===================== DECODE TAB =====================
@@ -127,6 +128,7 @@ class MainWindow(QtWidgets.QMainWindow):
         dec_root = QtWidgets.QHBoxLayout(dec)
 
         self.decodeStegoDrop = DropArea("Drop STEGO (PNG/BMP/WAV)")
+        self.browseStegoBtn = QtWidgets.QPushButton("Browse Stego...")
         self.lsbSpinDec = QtWidgets.QSpinBox(); self.lsbSpinDec.setRange(1, 8); self.lsbSpinDec.setValue(2)
         self.keySpinDec = QtWidgets.QSpinBox(); self.keySpinDec.setRange(0, 2_000_000_000); self.keySpinDec.setValue(1234)
         self.decodeBtn = QtWidgets.QPushButton("Decode from Stego")
@@ -137,6 +139,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         leftDec = QtWidgets.QVBoxLayout()
         leftDec.addWidget(self.decodeStegoDrop, 3)
+        leftDec.addWidget(self.browseStegoBtn)
         leftDec.addLayout(decCtrls)
         leftDec.addWidget(self.decodeBtn)
         self.statusLbl = QtWidgets.QLabel("Ready."); self.statusLbl.setWordWrap(True)
@@ -145,29 +148,21 @@ class MainWindow(QtWidgets.QMainWindow):
         leftDecW.setMinimumWidth(480)
 
         self.imagePreviewDec = PixmapBox("Preview (Stego)")
-        rightDec = QtWidgets.QVBoxLayout()
-        rightDec.addWidget(self.imagePreviewDec, 1)
-        rightDecW = QtWidgets.QWidget(); rightDecW.setLayout(rightDec)
-        rightDecW.setMaximumWidth(900)
+        rightDec = QtWidgets.QVBoxLayout(); rightDec.addWidget(self.imagePreviewDec, 1)
+        rightDecW = QtWidgets.QWidget(); rightDecW.setLayout(rightDec); rightDecW.setMaximumWidth(900)
 
         dec_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        dec_splitter.addWidget(leftDecW)
-        dec_splitter.addWidget(rightDecW)
-        dec_splitter.setChildrenCollapsible(False)
-        dec_splitter.setHandleWidth(8)
-        dec_splitter.setStretchFactor(0, 3)
-        dec_splitter.setStretchFactor(1, 2)
-        dec_splitter.setSizes([620, 560])
-
-        dec_root.addWidget(dec_splitter)
+        dec_splitter.addWidget(leftDecW); dec_splitter.addWidget(rightDecW)
+        dec_splitter.setChildrenCollapsible(False); dec_splitter.setHandleWidth(8)
+        dec_splitter.setStretchFactor(0, 3); dec_splitter.setStretchFactor(1, 2)
+        dec_splitter.setSizes([620, 560]); dec_root.addWidget(dec_splitter)
 
         # Assemble
         self.tabs.addTab(enc, "Encode")
         self.tabs.addTab(dec, "Decode")
 
-        # Global statusbar (optional)
-        self.appStatus = QtWidgets.QStatusBar()
-        self.setStatusBar(self.appStatus)
+        # Global statusbar
+        self.appStatus = QtWidgets.QStatusBar(); self.setStatusBar(self.appStatus)
         self.appStatus.showMessage("Ready.")
 
     def _update_text_len(self):

@@ -1,5 +1,6 @@
-import os, tempfile
+import os, sys, tempfile
 from PyQt6 import QtGui, QtWidgets, QtCore
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 import numpy as np
 
 # IO adapters
@@ -15,6 +16,7 @@ from core.capacity import image_capacity_bits, audio_capacity_bits
 from core.image_lsb import encode_rgb, decode_rgb_all
 from core.audio_lsb import encode_wav, decode_wav_all
 from core.viz import difference_map, audio_difference_panel, render_audio_compare_panel, render_image_compare_panel
+
 
 # ---------- helpers ----------
 def to_qpixmap_from_pil(pil_img):
@@ -36,6 +38,7 @@ def to_text_pixmap(text, w=620, h=240):
     pm = QtGui.QPixmap(w, h); pm.fill(QtGui.QColor('black'))
     p = QtGui.QPainter(pm); p.setPen(QtGui.QColor('white')); p.drawText(10, h // 2, text); p.end()
     return pm
+
 
 # ---------- pop-out dialogs ----------
 class AudioCompareDialog(QtWidgets.QDialog):
@@ -87,6 +90,7 @@ class ImageCompareDialog(QtWidgets.QDialog):
                                            zoom=max(1, self.zoom.value()), pan_x=self.panX.value(), pan_y=self.panY.value())
         self.imgLabel.setPixmap(to_qpixmap_from_pil(panel))
 
+
 # ---------- state ----------
 class AppState:
     def __init__(self):
@@ -105,52 +109,74 @@ class AppState:
         self.decode_img = None
         self.decode_audio = None
         self.decode_sr = None
+        # Audio player
+        self.player = None
+        self.audio_output = None
+
 
 # ---------- bind ----------
 def bind(window):
     s = AppState()
 
-    # add footer buttons into the Difference Map box (encode tab)
+    # footer buttons
     window.openDiffPopupBtn = QtWidgets.QPushButton("Open Audio Compare"); window.openDiffPopupBtn.setEnabled(False)
     window.openImgCompareBtn = QtWidgets.QPushButton("Open Image Compare"); window.openImgCompareBtn.setEnabled(False)
+    window.playAudioBtn = QtWidgets.QPushButton("▶ Play Stego Audio"); window.playAudioBtn.setEnabled(False)
+
     if hasattr(window, "diffPreviewEnc") and hasattr(window.diffPreviewEnc, "add_footer_widget"):
         window.diffPreviewEnc.add_footer_widget(window.openImgCompareBtn)
         window.diffPreviewEnc.add_footer_widget(window.openDiffPopupBtn)
+        window.diffPreviewEnc.add_footer_widget(window.playAudioBtn)
 
+    # ---------- capacity check ----------
     def update_capacity():
         lsb = window.lsbSpinEnc.value()
         if s.cover_type == 'image' and s.cover_img is not None:
             cap = image_capacity_bits(s.cover_img, lsb)
-            window.capacityLblEnc.setText(f"Capacity: {cap} bits (~{cap//8} bytes)")
         elif s.cover_type == 'audio' and s.cover_audio is not None:
             cap = audio_capacity_bits(s.cover_audio, lsb)
-            window.capacityLblEnc.setText(f"Capacity: {cap} bits (~{cap//8} bytes)")
         else:
             window.capacityLblEnc.setText("Capacity: -")
+            return
+
+        # payload size
+        if window.payloadTabs.currentIndex() == 1:  # text
+            plen = len(window.payloadTextEdit.toPlainText().encode("utf-8"))
+        elif s.payload_path:
+            plen = os.path.getsize(s.payload_path)
+        else:
+            plen = 0
+
+        window.capacityLblEnc.setText(
+            f"Capacity: {cap} bits (~{cap//8} bytes) | Payload: {plen} bytes"
+        )
+
+        if plen > cap//8:
+            window.capacityLblEnc.setStyleSheet("color: red; font-weight: bold;")
+        else:
+            window.capacityLblEnc.setStyleSheet("")
 
     # ============== ENCODE TAB ==============
     def enc_load_cover(path):
         s.stego_img = None; s.stego_audio = None
         ext = os.path.splitext(path)[1].lower()
         try:
-            if ext in ('.bmp', '.png', '.gif', '.jpg', '.jpeg'):
+            if ext in ('.bmp', '.png'):
                 img = load_image_rgb(path)
                 s.cover_img = img; s.cover_audio=None; s.cover_type='image'; s.sr=None
                 window.imagePreviewEnc.setPixmap(to_qpixmap_from_np_rgb(img))
                 window.diffPreviewEnc.setPixmap(QtGui.QPixmap())
                 window.statusLblEnc.setText(f"Loaded cover: {os.path.basename(path)}")
-                window.openImgCompareBtn.setEnabled(False)
-                window.openDiffPopupBtn.setEnabled(False)
+                window.openImgCompareBtn.setEnabled(False); window.openDiffPopupBtn.setEnabled(False)
             elif ext == '.wav':
                 audio, sr = load_wav_pcm16(path)
                 s.cover_audio = audio; s.cover_img=None; s.cover_type='audio'; s.sr=sr
                 window.imagePreviewEnc.setPixmap(to_text_pixmap(f"WAV: {audio.shape} @ {sr}Hz"))
                 window.diffPreviewEnc.setPixmap(QtGui.QPixmap())
                 window.statusLblEnc.setText(f"Loaded cover: {os.path.basename(path)}")
-                window.openImgCompareBtn.setEnabled(False)
-                window.openDiffPopupBtn.setEnabled(False)
+                window.openImgCompareBtn.setEnabled(False); window.openDiffPopupBtn.setEnabled(False)
             else:
-                window.statusLblEnc.setText("Unsupported cover format.")
+                window.statusLblEnc.setText("Unsupported cover format. Use BMP/PNG or WAV.")
                 return
             s.cover_path = path
             update_capacity()
@@ -160,6 +186,7 @@ def bind(window):
     def enc_load_payload(path):
         s.payload_path = path
         window.statusLblEnc.setText(f"Payload loaded: {os.path.basename(path)}")
+        update_capacity()
 
     def do_encode():
         if not s.cover_path:
@@ -205,6 +232,7 @@ def bind(window):
                 window.openImgCompareBtn.clicked.connect(_open_img_compare)
                 window.openImgCompareBtn.setEnabled(True)
                 window.openDiffPopupBtn.setEnabled(False)
+                window.playAudioBtn.setEnabled(False)
 
             elif s.cover_type == 'audio':
                 stego = encode_wav(s.cover_audio, lsb, key, packed, region=None)
@@ -224,6 +252,21 @@ def bind(window):
                 window.openDiffPopupBtn.clicked.connect(_open_audio_compare)
                 window.openDiffPopupBtn.setEnabled(True)
                 window.openImgCompareBtn.setEnabled(False)
+
+                # enable play stego audio
+                def _play_audio():
+                    if not s.player:
+                        s.player = QMediaPlayer()
+                        s.audio_output = QAudioOutput()
+                        s.player.setAudioOutput(s.audio_output)
+                    s.player.setSource(QtCore.QUrl.fromLocalFile(out))
+                    s.player.play()
+
+                try: window.playAudioBtn.clicked.disconnect()
+                except Exception: pass
+                window.playAudioBtn.clicked.connect(_play_audio)
+                window.playAudioBtn.setEnabled(True)
+
             else:
                 window.statusLblEnc.setText("Unsupported cover type.")
         except Exception as e:
@@ -279,18 +322,43 @@ def bind(window):
             out = os.path.join(tempfile.gettempdir(), "recovered_payload" + ext)
             with open(out, "wb") as f: f.write(meta["data"])
             window.statusLbl.setText(f"Decoded {meta.get('mime','unknown')} ({meta.get('length',0)} bytes) → {out}")
+
+            # if audio payload, auto play button
+            if meta.get("mime") == "audio/wav":
+                def _play_decoded():
+                    if not s.player:
+                        s.player = QMediaPlayer()
+                        s.audio_output = QAudioOutput()
+                        s.player.setAudioOutput(s.audio_output)
+                    s.player.setSource(QtCore.QUrl.fromLocalFile(out))
+                    s.player.play()
+                try: window.playAudioBtn.clicked.disconnect()
+                except Exception: pass
+                window.playAudioBtn.clicked.connect(_play_decoded)
+                window.playAudioBtn.setText("▶ Play Decoded Audio")
+                window.playAudioBtn.setEnabled(True)
+            else:
+                window.playAudioBtn.setEnabled(False)
         except Exception as e:
             window.statusLbl.setText(f"Decode error: {e}")
 
     # ---------- wire UI ----------
-    # Encode tab
     window.encodeCoverDrop.fileDropped.connect(enc_load_cover)
     window.encodePayloadDrop.fileDropped.connect(enc_load_payload)
     window.encodeBtn.clicked.connect(do_encode)
     window.lsbSpinEnc.valueChanged.connect(lambda _: update_capacity())
+    window.browseCoverBtn.clicked.connect(lambda: _browse_file(window, window.encodeCoverDrop))
+    window.browsePayloadBtn.clicked.connect(lambda: _browse_file(window, window.encodePayloadDrop))
 
-    # Decode tab
     window.decodeStegoDrop.fileDropped.connect(dec_load_stego)
     window.decodeBtn.clicked.connect(do_decode)
+    window.browseStegoBtn.clicked.connect(lambda: _browse_file(window, window.decodeStegoDrop))
 
     return s
+
+
+# ---------- file dialog helper ----------
+def _browse_file(window, dropArea):
+    path, _ = QtWidgets.QFileDialog.getOpenFileName(window, "Select File")
+    if path:
+        dropArea.fileDropped.emit(path)
