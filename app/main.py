@@ -1,8 +1,8 @@
 # app/main.py
 import sys
 from PyQt6.QtWidgets import QApplication
-from ui import MainWindow
-from controllers import bind
+from .ui import MainWindow
+from .controllers import bind
 
 def main():
     app = QApplication(sys.argv)
