@@ -242,6 +242,11 @@ def bind(window):
         window.openImgCompareBtn.setEnabled(False)
         window.openDiffPopupBtn.setEnabled(False)
 
+        # Hide by default when switching files
+        window.regionGroup.setVisible(False)
+        window.regionXSpin.setValue(0); window.regionYSpin.setValue(0)
+        window.regionWSpin.setValue(0); window.regionHSpin.setValue(0)
+
         ext = os.path.splitext(path)[1].lower()
         s.stego_img = None; s.stego_audio = None; s.stego_video = None  # reset any previous stego
         try:
@@ -250,6 +255,15 @@ def bind(window):
                 s.cover_img = img; s.cover_audio = None; s.cover_video = None; s.cover_type = 'image'; s.sr = None; s.fps = None
                 window.imagePreviewEnc.setPixmap(to_qpixmap_from_np_rgb(img))
                 window.diffPreviewEnc.setPixmap(QtGui.QPixmap())
+
+                # Show region inputs for images and set helpful max ranges
+                H, W = img.shape[:2]
+                window.regionXSpin.setMaximum(max(0, W-1))
+                window.regionYSpin.setMaximum(max(0, H-1))
+                window.regionWSpin.setMaximum(W)
+                window.regionHSpin.setMaximum(H)
+                window.regionGroup.setVisible(True)
+
                 if ext in ('.jpg', '.jpeg', '.gif'):
                     window.statusLblEnc.setText(
                         f"Loaded cover: {os.path.basename(path)} (warning: {ext.upper()} is lossy; stego will be saved as PNG)."
@@ -346,9 +360,24 @@ def bind(window):
                         window.statusLblEnc.setText(f"Payload too large! Need {payload_bits} bits but cover only has {cover_capacity} bits capacity at {lsb} LSB.")
                         return
 
+            region = None
+            if (window.regionWSpin.value() > 0 and window.regionHSpin.value() > 0):
+                region = (
+                    window.regionYSpin.value(),   # y0
+                    window.regionXSpin.value(),   # x0
+                    window.regionHSpin.value(),   # height
+                    window.regionWSpin.value()    # width
+                )
 
+                # Validate region against image bounds
+                if region and s.cover_type == 'image':
+                    y0, x0, rh, rw = region
+                    if y0 + rh > s.cover_img.shape[0] or x0 + rw > s.cover_img.shape[1]:
+                        window.statusLblEnc.setText("Invalid region: outside image bounds.")
+                        return
+                    
             if s.cover_type == 'image':
-                stego = encode_rgb(s.cover_img, packed, lsb, key, region=None)
+                stego = encode_rgb(s.cover_img, packed, lsb, key, region=region)
                 s.stego_img = stego; s.stego_audio = None; s.stego_video = None
                 base = os.path.splitext(os.path.basename(s.cover_path))[0]
                 out  = os.path.join(tempfile.gettempdir(), f"stego_{base}.png")   # always lossless
@@ -438,11 +467,26 @@ def bind(window):
     def dec_load_stego(path):
         s.decode_path = path
         ext = os.path.splitext(path)[1].lower()
+
+        # Reset and hide region inputs on Decode tab
+        window.regionGroupDec.setVisible(False)
+        window.regionXSpinDec.setValue(0); window.regionYSpinDec.setValue(0)
+        window.regionWSpinDec.setValue(0); window.regionHSpinDec.setValue(0)
+
         try:
             if ext in ('.png', '.bmp'):
                 s.decode_img = load_image_rgb(path); s.decode_audio=None; s.decode_video=None; s.decode_type='image'; s.decode_sr=None; s.decode_fps=None
                 window.imagePreviewDec.setPixmap(to_qpixmap_from_np_rgb(s.decode_img))
                 window.statusLbl.setText(f"Loaded stego: {os.path.basename(path)}")
+
+                # show region inputs + bound ranges to image size
+                H, W = s.decode_img.shape[:2]
+                window.regionXSpinDec.setMaximum(max(0, W-1))
+                window.regionYSpinDec.setMaximum(max(0, H-1))
+                window.regionWSpinDec.setMaximum(W)
+                window.regionHSpinDec.setMaximum(H)
+                window.regionGroupDec.setVisible(True)
+
             elif ext == '.wav':
                 a, sr = load_wav_pcm16(path)
                 s.decode_audio = a; s.decode_img=None; s.decode_video=None; s.decode_type='audio'; s.decode_sr=sr; s.decode_fps=None
@@ -467,15 +511,34 @@ def bind(window):
             window.statusLbl.setText("Drop a stego file first (Decode tab).")
             return
         try:
+            region = None
+            if (window.regionWSpinDec.value() > 0 and window.regionHSpinDec.value() > 0):
+                region = (
+                    window.regionYSpinDec.value(),  # y0
+                    window.regionXSpinDec.value(),  # x0
+                    window.regionHSpinDec.value(),  # height
+                    window.regionWSpinDec.value()   # width
+    )
             if s.decode_type == 'image':
-                blob = decode_rgb_all(s.decode_img, lsb, key, region=None, max_bits=None)
+                # Validate region against image bounds
+                if region is not None:
+                    y0, x0, rh, rw = region
+                    H, W = s.decode_img.shape[:2]
+                    if y0 < 0 or x0 < 0 or rh <= 0 or rw <= 0 or (y0 + rh > H) or (x0 + rw > W):
+                        window.statusLbl.setText("Invalid region: outside stego image bounds.")
+                        return
+
+                # Decode (with region if provided)
+                blob = decode_rgb_all(s.decode_img, lsb, key, region=region, max_bits=None)
                 meta, _ = try_unpack_partial(blob)
                 if not meta:
                     ok, meta = probe_image_decode(s.decode_img, lsb, key)
                     if not ok:
                         off = _scan_magic_prefix(blob)
                         if off >= 0:
-                            window.statusLbl.setText(f"Decode failed: header at byte offset {off} (bit packing/order mismatch).")
+                            window.statusLbl.setText(
+                                f"Decode failed: header at byte offset {off} (bit packing/order mismatch)."
+                            )
                         else:
                             window.statusLbl.setText("Decode failed: No valid stego header found.")
                         return
