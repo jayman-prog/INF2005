@@ -340,13 +340,13 @@ def bind(window):
         try:
             if s.payload_text:
                 raw = s.payload_text.encode('utf-8')
-                packed = pack_payload(raw, "text/plain", key_hint=(key % 1000003))
+                mime_type = "text/plain"   # <-- add this
+                packed = pack_payload(raw, mime_type, key_hint=(key % 1000003))
             else:
                 raw = open(s.payload_path, 'rb').read()
-                # Detect proper MIME type for the payload
                 mime_type = detect_mime_type(s.payload_path)
                 packed = pack_payload(raw, mime_type, key_hint=(key % 1000003))
-                
+
                 # Check capacity
                 payload_bits = len(packed) * 8
                 if s.cover_type == 'image':
